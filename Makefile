@@ -807,8 +807,6 @@ $(INITRD): $(UELFS) $(MUSL_ELFS) $(BUILD)/dynhello.elf $(BB_BIN) $(BASH_BIN) \
 	cp -a $(DESK_STAGE)/share/gtk-3.0/. $(BUILD)/initrd-root/usr/share/gtk-3.0/
 	mkdir -p $(BUILD)/initrd-root/usr/share/glib-2.0
 	cp -a $(DESK_STAGE)/share/glib-2.0/. $(BUILD)/initrd-root/usr/share/glib-2.0/
-	mkdir -p $(BUILD)/initrd-root/usr/share/dbus-1
-	cp -a $(DESK_STAGE)/share/dbus-1/. $(BUILD)/initrd-root/usr/share/dbus-1/
 	mkdir -p $(BUILD)/initrd-root/usr/share/wayland-sessions
 	cp -a $(DESK_STAGE)/usr/share/wayland-sessions/. $(BUILD)/initrd-root/usr/share/wayland-sessions/
 	mkdir -p $(BUILD)/initrd-root/etc/dbus-1
@@ -818,11 +816,15 @@ $(INITRD): $(UELFS) $(MUSL_ELFS) $(BUILD)/dynhello.elf $(BB_BIN) $(BASH_BIN) \
 	# Xfconf.  Rewrite the prefix to /usr -- matching where everything was
 	# installed above -- before packing.  Same treatment for the dbus conf
 	# files, whose listen/pidfile/include paths carry the prefix too.
+	rm -rf $(BUILD)/initrd-root/usr/share/dbus-1 $(BUILD)/initrd-root/etc/dbus-1
+	mkdir -p $(BUILD)/initrd-root/usr/share/dbus-1 $(BUILD)/initrd-root/etc/dbus-1
+	cp -a $(DESK_STAGE)/share/dbus-1/. $(BUILD)/initrd-root/usr/share/dbus-1/
+	cp -a $(DESK_STAGE)/etc/dbus-1/. $(BUILD)/initrd-root/etc/dbus-1/
 	abs_stage=$$(realpath $(DESK_STAGE)); \
 	for f in $(BUILD)/initrd-root/usr/share/dbus-1/services/*.service \
 	         $(BUILD)/initrd-root/usr/share/dbus-1/*.conf \
 	         $(BUILD)/initrd-root/etc/dbus-1/*.conf; do \
-	  [ -f "$$f" ] && sed -i "s|$$abs_stage|/usr|g; s|$(DESK_STAGE)|/usr|g" $$f || true; \
+	  [ -f "$$f" ] && sed -i "s|/persistent$$abs_stage|/usr|g; s|$$abs_stage|/usr|g; s|$(DESK_STAGE)|/usr|g" $$f || true; \
 	done
 	
 	cp src/user/rc $(BUILD)/initrd-root/etc/rc            # run once at boot by init

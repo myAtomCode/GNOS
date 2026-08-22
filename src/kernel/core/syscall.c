@@ -4465,6 +4465,18 @@ void syscall_handler(regs_t *r)
         break;
 
     case SYS_ioctl:
+#ifdef SYSTRACE
+        if (proc_current()) {
+            static unsigned ie;
+            dbg_puts("IOCTL-E p=");
+            dbg_puts_dec((uint32_t)proc_current()->pid);
+            dbg_puts(" fd=");
+            dbg_puts_dec((uint32_t)(int)a1);
+            dbg_puts(" cmd=");
+            dbg_puts_hex(a2);
+            dbg_puts("\n");
+        }
+#endif
         ret = sys_ioctl((int)a1, a2, a3);
         break;
 
@@ -4635,11 +4647,28 @@ void syscall_handler(regs_t *r)
         char abs[GNUOS_PATH_MAX];
         ret = path_abs(a1, abs);
         if (ret < 0) break;
+#ifdef SYSTRACE
+        {   /* remember what each exec tried, so ENOENT loops name their
+             * missing binary instead of hiding behind a bare return code */
+        }
+#endif
         int n = collect_vec(a2, g_argv);
         if (n < 0) { ret = n; break; }
         n = collect_vec(a3, g_envp);
         if (n < 0) { ret = n; break; }
         ret = proc_execve(abs, g_argv, g_envp, r);
+#ifdef SYSTRACE
+        if (ret == -E_NOENT) {
+            static unsigned en;
+            if (++en < 30 || (en % 500) == 0) {
+                dbg_puts("EXEC-ENOENT p=");
+                dbg_puts_dec((uint32_t)(proc_current() ? proc_current()->pid : 0));
+                dbg_puts(" path=");
+                dbg_puts(abs);
+                dbg_puts("\n");
+            }
+        }
+#endif
         if (ret == 0)
             return;                    /* the frame now belongs to the new image */
         break;
@@ -4907,7 +4936,8 @@ void syscall_handler(regs_t *r)
     if (nr == 9 || nr == 10 || nr == 12 || nr == 158 || nr == 218 ||
         nr == 0 || nr == 1 || nr == 7 || nr == 29 || nr == 43 ||
         nr == 202 || nr == 232 || nr == 257 || nr == 57 ||
-        nr == 217 || nr == 16 || nr == 8 || nr == 59 || nr == 61) {
+        nr == 217 || nr == 16 || nr == 8 || nr == 59 || nr == 61 ||
+        nr == 270 || nr == 23 || nr == 281 || nr == 35 || nr == 230) {
         dbg_puts("SY p=");
         dbg_puts_dec((uint32_t)(proc_current() ? proc_current()->pid : 0));
         dbg_puts(" nr=");

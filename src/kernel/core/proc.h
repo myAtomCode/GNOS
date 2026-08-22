@@ -368,6 +368,7 @@ void sched_block_timeout(wait_reason_t why, uint64_t ticks);
 void sched_wake(proc_t *p);
 /* Wake everybody sleeping for the same reason (a driver got some data). */
 void sched_wake_reason(wait_reason_t why);
+void sched_wake_poll_channels(void);
 /* Wake every process blocked on the given DRM wait_queue. */
 void sched_wake_queue(void *q);
 /* Wake anyone whose deadline has passed.  Called from the timer interrupt. */

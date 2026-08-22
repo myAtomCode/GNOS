@@ -280,7 +280,7 @@ static void line_flush(vt_t *v, int with_newline)
     if (with_newline)
         ring_put(v, '\n');
     v->line_len = 0;
-    sched_wake_reason(WAIT_TTY);
+    sched_wake_poll_channels();
 }
 
 /* ---- the line discipline ----------------------------------------------- */
@@ -318,7 +318,7 @@ static void vt_input_char(vt_t *v, uint8_t c)
 
             /* A reader blocked in the foreground group has to come back out
              * of the kernel for the signal to take effect. */
-            sched_wake_reason(WAIT_TTY);
+            sched_wake_poll_channels();
             return;
         }
     }
@@ -336,7 +336,7 @@ static void vt_input_char(vt_t *v, uint8_t c)
     if (!(v->tio.c_lflag & ICANON)) {
         echo_char(v, c);
         ring_put(v, c);
-        sched_wake_reason(WAIT_TTY);
+        sched_wake_poll_channels();
         return;
     }
 
@@ -346,7 +346,7 @@ static void vt_input_char(vt_t *v, uint8_t c)
             line_flush(v, 0);           /* deliver the partial line */
         else {
             ring_put(v, RING_EOF);
-            sched_wake_reason(WAIT_TTY);
+            sched_wake_poll_channels();
         }
         return;
     }
@@ -441,7 +441,7 @@ void tty_vt_switch(int n)
 
     g_active = n;
     fbcon_activate(g_vt[n].con);
-    sched_wake_reason(WAIT_TTY);
+    sched_wake_poll_channels();
 }
 
 void tty_vt_release_session(int sid)
@@ -807,7 +807,7 @@ static void vt_set_termios(vt_t *v, const termios_t *t, int flush)
 
     /* A reader parked under the old rules may already be satisfied by the
      * new ones (VMIN dropping to 0, say), so let it look again. */
-    sched_wake_reason(WAIT_TTY);
+    sched_wake_poll_channels();
 }
 
 void tty_get_termios(termios_t *t)

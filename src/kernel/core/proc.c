@@ -677,6 +677,12 @@ void kthread_bootstrap(kthread_bootstrap_t *b)
     void    (*entry)(void *) = b->entry;
     void    *arg             = b->arg;
     proc_t  *me              = proc_current();
+#ifdef SYSTRACE
+    {
+        extern void dbg_puts(const char *);
+        dbg_puts("KBOOT\n");
+    }
+#endif
 
     kfree(b);                   /* entry may need the heap */
 
@@ -1372,9 +1378,9 @@ void proc_exit_group(int status)
     if (leader != p) {
         /* The leader will never run again; if it is sitting in the run
          * queue, take it out before zombifying it. */
-        spin_lock(&g_proc_lock);
+        spin_lock_irq(&g_proc_lock);
         rq_remove(leader);
-        spin_unlock(&g_proc_lock);
+        spin_unlock_irq(&g_proc_lock);
         proc_teardown(leader, 0);
         leader->exit_status = status;
         leader->term_sig    = p->term_sig;
@@ -1582,9 +1588,9 @@ int proc_signal(proc_t *p, int sig)
             p->reported = 0;
             /* A stopped process is not queued; put it back with a fresh
              * slice, exactly like a wake. */
-            spin_lock(&g_proc_lock);
+            spin_lock_irq(&g_proc_lock);
             enqueue_fresh(p);
-            spin_unlock(&g_proc_lock);
+            spin_unlock_irq(&g_proc_lock);
         }
         return 0;
     }
@@ -1605,9 +1611,9 @@ int proc_signal(proc_t *p, int sig)
     if (p->state == PROC_BLOCKED)
         sched_wake(p);
     else if (p->state == PROC_STOPPED && sig == SIGKILL) {
-        spin_lock(&g_proc_lock);
+        spin_lock_irq(&g_proc_lock);
         enqueue_fresh(p);
-        spin_unlock(&g_proc_lock);
+        spin_unlock_irq(&g_proc_lock);
     }
 
     return 0;
@@ -1848,6 +1854,14 @@ static void rq_remove(proc_t *p)
  * reset -- it enters as if newly runnable at the current virtual time. */
 static void enqueue_fresh(proc_t *p)
 {
+#ifdef SYSTRACE
+    if (p->name[0]=='d' && p->name[1]=='r' && p->name[2]=='m') {
+        extern void dbg_puts(const char *);
+        dbg_puts("ENQ ");
+        dbg_puts(p->name);
+        dbg_puts("\n");
+    }
+#endif
     p->vruntime = g_vtime;
     p->deadline = g_vtime + p->slice;
     p->state    = PROC_READY;
@@ -1859,9 +1873,9 @@ static void enqueue_fresh(proc_t *p)
  * share the "fresh task" rules. */
 static void proc_make_runnable(proc_t *p)
 {
-    spin_lock(&g_proc_lock);
+    spin_lock_irq(&g_proc_lock);
     enqueue_fresh(p);
-    spin_unlock(&g_proc_lock);
+    spin_unlock_irq(&g_proc_lock);
 }
 
 /*
@@ -1879,7 +1893,7 @@ static void proc_make_runnable(proc_t *p)
  */
 static int schedule(void)
 {
-    spin_lock(&g_proc_lock);
+    spin_lock_irq(&g_proc_lock);
 
     proc_t *prev = cpu_self()->current;
 
@@ -1904,12 +1918,18 @@ static int schedule(void)
     }
 
     proc_t *next = rq_pop();
+#ifdef SYSTRACE
+    if (next && next->name[0]=='d' && next->name[1]=='r' && next->name[2]=='m') {
+        extern void dbg_puts(const char *);
+        dbg_puts("PICK drm-refresh\n");
+    }
+#endif
     if (!next) {
         /* Nothing runnable.  A caller that is still RUNNING may simply
          * carry on; a blocked one parks this CPU's context in the idle
          * slot until something wakes it. */
         if (!prev || prev->state == PROC_RUNNING) {
-            spin_unlock(&g_proc_lock);
+            spin_unlock_irq(&g_proc_lock);
             return 0;
         }
         if (prev->bkl_held) {
@@ -1919,7 +1939,7 @@ static int schedule(void)
         cpu_self()->current = NULL;
         vmm_switch_kernel();
         switch_context(&prev->saved_rsp, cpu_self()->sched_rsp);
-        spin_unlock(&g_proc_lock);       /* resumed: we are the idle context */
+        spin_unlock_irq(&g_proc_lock);       /* resumed: we are the idle context */
         return 1;
     }
 
@@ -1934,7 +1954,7 @@ static int schedule(void)
             prev->bkl_held = 0;
             bkl_release();
         }
-        spin_unlock(&g_proc_lock);
+        spin_unlock_irq(&g_proc_lock);
         return 1;
     }
 
@@ -1968,11 +1988,11 @@ static int schedule(void)
      * across the switch the first timer tick deadlocks on it.  Drop the
      * lock before handing the CPU over. */
     if (fresh)
-        spin_unlock(&g_proc_lock);
+        spin_unlock_irq(&g_proc_lock);
 
     uint64_t *save = prev ? &prev->saved_rsp : &cpu_self()->sched_rsp;
     switch_context(save, next->saved_rsp);
-    spin_unlock(&g_proc_lock);           /* resumed: inherit this core's lock */
+    spin_unlock_irq(&g_proc_lock);           /* resumed: inherit this core's lock */
     return 1;
 }
 
@@ -2017,7 +2037,7 @@ void sched_tick(void)
     if (!cur)
         return;
 
-    spin_lock(&g_proc_lock);
+    spin_lock_irq(&g_proc_lock);
     uint64_t now  = timer_ticks();
     cur->vruntime += now - cur->last_run_tick;
     g_vtime       += now - cur->last_run_tick;
@@ -2025,7 +2045,7 @@ void sched_tick(void)
     proc_t *head  = rq_peek();
     int preempt   = (cur->vruntime >= cur->deadline) ||    /* slice gone */
                     (head && head->deadline < cur->deadline); /* owed task */
-    spin_unlock(&g_proc_lock);
+    spin_unlock_irq(&g_proc_lock);
 
     if (preempt) {
         schedule();
@@ -2081,17 +2101,37 @@ void sched_wake(proc_t *p)
 {
     if (!p)
         return;
-    spin_lock(&g_proc_lock);
+    spin_lock_irq(&g_proc_lock);
     if (p->state == PROC_BLOCKED) {
         p->wait_reason = WAIT_NONE;
         p->wake_tick   = 0;
         enqueue_fresh(p);
     }
-    spin_unlock(&g_proc_lock);
+    spin_unlock_irq(&g_proc_lock);
 }
 
 void sched_expire_timeouts(void)
 {
+#ifdef SYSTRACE
+    {   /* Track the drm-refresh kernel thread through its lifecycle: the
+         * name scan is O(MAX_PROCS) once a second, cheap enough here. */
+        static unsigned dq;
+        if (++dq <= 5 || (dq & 2047) == 0) {
+            for (int i = 0; i < MAX_PROCS; i++) {
+                if (g_procs[i].name[0]=='d' && g_procs[i].name[1]=='r' &&
+                    g_procs[i].name[2]=='m') {
+                    extern void dbg_puts(const char *);
+                    extern void dbg_puts_dec(uint32_t);
+                    dbg_puts("RTHRD state=");
+                    dbg_puts_dec((uint32_t)g_procs[i].state);
+                    dbg_puts(" rq=");
+                    dbg_puts_dec((uint32_t)(g_procs[i].rq_index + 1));
+                    dbg_puts("\n");
+                }
+            }
+        }
+    }
+#endif
     uint64_t now = timer_ticks();
     for (int i = 0; i < MAX_PROCS; i++) {
         proc_t *p = &g_procs[i];
@@ -2109,6 +2149,22 @@ void sched_expire_timeouts(void)
         if (p->state == PROC_BLOCKED && p->wake_tick && now >= p->wake_tick)
             sched_wake(p);
     }
+}
+
+/*
+ * Wake every channel a poll()/select() sleeper might be riding.  A poll set
+ * mixes fd kinds -- sockets ride WAIT_PIPE, tty devices WAIT_TTY, network
+ * stacks WAIT_NET -- but do_ppoll() can only block on ONE of them (the first
+ * kind it saw).  An event delivered through a different channel than the one
+ * the sleeper picked would never reach it: the compositor polled its input
+ * devices and its wayland client socket together, slept on WAIT_TTY, and the
+ * client's write -- which only woke WAIT_PIPE -- sat unanswered forever.
+ * Waking all three turns the extra passes into harmless rescans. */
+void sched_wake_poll_channels(void)
+{
+    sched_wake_reason(WAIT_PIPE);
+    sched_wake_reason(WAIT_NET);
+    sched_wake_reason(WAIT_TTY);
 }
 
 void sched_wake_reason(wait_reason_t why)

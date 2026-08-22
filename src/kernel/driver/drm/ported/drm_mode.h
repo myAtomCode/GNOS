@@ -516,6 +516,7 @@ struct drm_mode_destroy_blob {
 #define DRM_IOCTL_MODE_GETFB             DRM_IOWR(0xAD, struct drm_mode_fb_cmd)
 #define DRM_IOCTL_MODE_ADDFB             DRM_IOWR(0xAE, struct drm_mode_fb_cmd)
 #define DRM_IOCTL_MODE_RMFB              DRM_IOWR(0xAF, unsigned int)
+#define DRM_IOCTL_MODE_CLOSEFB          0xc00864d0
 #define DRM_IOCTL_MODE_PAGE_FLIP         DRM_IOWR(0xB0, struct drm_mode_crtc_page_flip)
 #define DRM_IOCTL_MODE_DIRTYFB           DRM_IOWR(0xB1, struct drm_mode_fb_dirty_cmd)
 #define DRM_IOCTL_MODE_CREATE_DUMB       DRM_IOWR(0xB2, struct drm_mode_create_dumb)

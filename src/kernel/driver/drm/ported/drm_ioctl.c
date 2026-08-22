@@ -53,6 +53,13 @@ extern int drm_mode_setplane(struct drm_device *dev, void *data, struct drm_file
 extern int drm_mode_addfb(struct drm_device *dev, void *data, struct drm_file *file_priv);
 extern int drm_mode_addfb2(struct drm_device *dev, void *data, struct drm_file *file_priv);
 extern int drm_mode_rmfb(struct drm_device *dev, void *data, struct drm_file *file_priv);
+/* MODE_CLOSEFB is the modern single-word twin of RMFB: same fb_id in, the
+ * framebuffer goes away.  wlroots prefers it and only falls back to RMFB on
+ * EINVAL -- returning ENOTTY made every FB teardown log an error. */
+static int drm_mode_closefb(struct drm_device *dev, void *data, struct drm_file *file_priv)
+{
+    return drm_mode_rmfb(dev, data, file_priv);
+}
 extern int drm_mode_getfb(struct drm_device *dev, void *data, struct drm_file *file_priv);
 extern int drm_mode_dirtyfb(struct drm_device *dev, void *data, struct drm_file *file_priv);
 
@@ -244,6 +251,7 @@ static const struct drm_ioctl_desc drm_core_ioctls[] = {
     {DRM_IOCTL_MODE_GETFB,             drm_mode_getfb,                   DRM_MASTER | DRM_AUTH},
     {DRM_IOCTL_MODE_ADDFB,             drm_mode_addfb,                   DRM_MASTER | DRM_AUTH},
     {DRM_IOCTL_MODE_RMFB,              drm_mode_rmfb,                    DRM_MASTER | DRM_AUTH},
+    {DRM_IOCTL_MODE_CLOSEFB,           drm_mode_closefb,                 DRM_MASTER | DRM_AUTH},
     {DRM_IOCTL_MODE_PAGE_FLIP,         drm_mode_page_flip_ioctl,         DRM_MASTER | DRM_AUTH},
     {DRM_IOCTL_MODE_DIRTYFB,           drm_mode_dirtyfb,                 DRM_MASTER | DRM_AUTH},
     {DRM_IOCTL_MODE_CREATE_DUMB,       NULL,                             DRM_AUTH             },

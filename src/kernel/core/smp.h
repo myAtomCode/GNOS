@@ -66,6 +66,7 @@ static inline cpu_t *cpu_self(void)
  * exactly as before. */
 typedef struct {
     volatile uint32_t v;
+    uint32_t          saved_flags;   /* IF state from spin_lock_irq */
 } spinlock_t;
 
 static inline void spin_lock(spinlock_t *l)
@@ -82,6 +83,27 @@ static inline void spin_unlock(spinlock_t *l)
 {
     asm volatile("" ::: "memory");
     l->v = 0;
+}
+
+/* IRQ-safe acquire: the kernel takes some of these locks from interrupt
+ * context (the timer's timeout expiry wakes sleepers through the very same
+ * process lock), so a holder interrupted mid-section would otherwise spin
+ * against its own interrupt forever -- and with the timer on that CPU, the
+ * whole tick-driven machine dies quietly. */
+static inline void spin_lock_irq(spinlock_t *l)
+{
+    uint64_t f;
+    asm volatile("pushfq; pop %0; cli" : "=r"(f) : : "memory");
+    spin_lock(l);
+    l->saved_flags = (uint32_t)f;
+}
+
+static inline void spin_unlock_irq(spinlock_t *l)
+{
+    uint32_t f = l->saved_flags;
+    spin_unlock(l);
+    if (f & 0x200)
+        asm volatile("sti" ::: "memory");
 }
 
 /* The big kernel lock.  Taken on every trap/syscall entry from ring 3 and

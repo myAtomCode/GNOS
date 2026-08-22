@@ -393,6 +393,15 @@ void isr_dispatch(regs_t *r)
      * the same reason the PIC path does -- the handler may switch tasks. */
     if (r->vector == LAPIC_TIMER_VECTOR) {
         lapic_eoi();
+#ifdef SYSTRACE
+        {
+            static unsigned lt;
+            if ((++lt & 4095) == 0) {
+                extern void dbg_puts(const char *);
+                dbg_puts("LAPIC-TICK\n");
+            }
+        }
+#endif
         irq_handler_t h = lapic_timer_handler();
         if (h)
             h(r);

@@ -40,6 +40,19 @@ static inline uint8_t inb(uint16_t port)
 
 static void timer_irq(regs_t *r)
 {
+#ifdef SYSTRACE
+    {   /* Heartbeat: when these stop, every tick-driven mechanism -- CFS
+         * preemption, timeouts, the DRM refresh thread -- dies silently. */
+        static unsigned long tk;
+        if ((++tk & 1023) == 0) {
+            extern void dbg_puts(const char *);
+            extern void dbg_puts_hex(uint64_t);
+            dbg_puts("TICK ");
+            dbg_puts_hex((uint64_t)tk);
+            dbg_puts("\n");
+        }
+    }
+#endif
     extern void drm_dummy_refresh(void);
     static unsigned drm_div;
     g_ticks++;

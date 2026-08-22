@@ -257,8 +257,22 @@ static struct drm_framebuffer *g_scan_fb;
 /* Called from the PIT tick (timer_irq): push the live dumb buffer to the
  * console framebuffer and stamp the cursor over it.  Cheap enough at
  * console resolutions, and it needs no vblank client to be waiting. */
+static unsigned long g_refresh_count;
+
 void drm_dummy_refresh(void)
 {
+    /* Heartbeat: once the compositor hands us its first framebuffer this
+     * counts up every frame; a stalled desktop with n=0 means the commit
+     * path never delivered anything worth showing. */
+    if ((++g_refresh_count & 511) == 0) {
+        extern void dbg_puts(const char *);
+        extern void dbg_puts_hex(uint64_t);
+        dbg_puts("REFRESH n=");
+        dbg_puts_hex(g_refresh_count);
+        dbg_puts(" fb=");
+        dbg_puts_hex((uint64_t)(uintptr_t)g_scan_fb);
+        dbg_puts("\n");
+    }
     if (!g_scan_fb || !g_scan_fb->obj[0] || !g_scan_fb->obj[0]->backing)
         return;
     uint32_t dw = 0, dh = 0, dpitch = 0;
@@ -279,10 +293,21 @@ void drm_dummy_refresh(void)
     drm_dummy_draw_cursor(dst, dw, dh, dstep);
 }
 
+static void drm_refresh_thread(void *arg);
+
 static int drm_dummy_page_flip(struct drm_crtc *crtc, struct drm_framebuffer *fb,
                                struct drm_pending_vblank_event *event,
                                uint32_t flags)
 {
+    /* Lazy start: the first flip proves userland is driving KMS, which
+     * also proves the scheduler exists to run the refresh thread. */
+    static int refresh_thread_up;
+    if (!refresh_thread_up) {
+        refresh_thread_up = 1;
+        if (!kthread_create("drm-refresh", drm_refresh_thread, NULL))
+            refresh_thread_up = 0;
+    }
+
     (void)crtc; (void)event; (void)flags;
     if (!fb)
         return 0;
@@ -497,8 +522,17 @@ static int drm_dummy_kms_add_modes(struct drm_device *dev, struct drm_connector 
 static void drm_refresh_thread(void *arg)
 {
     (void)arg;
+    {
+        extern void dbg_puts(const char *);
+        dbg_puts("RTHREAD start\n");
+    }
     for (;;) {
         sched_block_timeout((uint32_t)DRM_WAIT_SLEEP, 1);   /* one PIT tick per frame */
+        /* One software vblank per frame: retires pending page flips
+         * (otherwise every flip after the first returns EBUSY forever),
+         * delivers flip/vblank events to clients, then pushes the live
+         * dumb buffer to the visible framebuffer. */
+        drm_vblank_tick();
         drm_dummy_refresh();
     }
 }
@@ -615,15 +649,12 @@ static int drm_dummy_kms_setup(struct drm_device *dev)
     DRM_INFO("KMS pipeline: CRTC-%u + primary plane-%u + encoder-%u + connector-%u (%u modes)\n", pipeline_crtc.base.id,
              pipeline_primary_plane.base.id, pipeline_encoder.base.id, pipeline_connector.base.id, sizeof(dummy_modes) / sizeof(dummy_modes[0]));
 
-    /* Periodic scanout refresh.  The pixman renderer draws in place into
-     * the dumb buffer and the framebuffer never changes after the first
-     * commit, so without a re-blit the display would freeze on that first
-     * frame.  This used to hang off the PIT tick, but a multi-megabyte
-     * copy inside the timer interrupt starved the whole machine; as a
-     * kernel thread it just competes for CPU like everything else. */
-    if (!kthread_create("drm-refresh", drm_refresh_thread, NULL))
-        return -ENOMEM;
-
+    /* The refresh kernel thread is NOT created here: KMS setup runs from
+     * kernel_init() BEFORE proc_init()/sched_start(), and a task enqueued
+     * that early is silently dropped when the scheduler initialises.  It
+     * is started lazily by the first page flip instead (see
+     * drm_dummy_page_flip), which by definition happens once userland --
+     * and therefore a working scheduler -- exists. */
     return 0;
 }
 
@@ -632,13 +663,19 @@ static int drm_dummy_kms_setup(struct drm_device *dev)
 /* DRM VFS ioctl wrapper                                               */
 /* ------------------------------------------------------------------ */
 
-size_t drm_dev_read(void *file, void *addr, size_t offset, size_t size)
+int64_t drm_dev_read(void *file, void *addr, size_t offset, size_t size)
 {
     (void)file;
     (void)addr;
     (void)offset;
     (void)size;
-    return 0;
+    /* The event queue is always empty today, but the answer still matters:
+     * libdrm's drmHandleEvent() read()s the node looking for kernel-pushed
+     * events.  On Linux a 0 means clean END OF FILE, and the caller treated
+     * the device as exhausted -- labwc spun reading card0/renderD128 back to
+     * back, never returned to its event loop, and no wayland client ever got
+     * served.  "No events right now" is EAGAIN, not EOF. */
+    return -EAGAIN;
 }
 
 size_t drm_dev_write(void *file, const void *addr, size_t offset, size_t size)
@@ -720,7 +757,7 @@ int64_t drm_dev_file_read(void *ctx, void *private_data, uint64_t flags, void *a
 {
     (void)ctx;
     (void)flags;
-    return (int64_t)drm_dev_read(private_data, addr, offset, size);
+    return drm_dev_read(private_data, addr, offset, size);
 }
 
 int64_t drm_dev_file_write(void *ctx, void *private_data, uint64_t flags, const void *addr, size_t offset, size_t size)

@@ -68,7 +68,10 @@ static unix_t *unix_at(int u)
 
 static void ring_wake(void)
 {
-    sched_wake_reason(WAIT_PIPE);
+    /* A poll() set mixes sockets with other fd kinds, and the sleeper may
+     * have picked a channel other than WAIT_PIPE -- see
+     * sched_wake_poll_channels(). */
+    sched_wake_poll_channels();
 }
 
 static void ring_put(unix_t *u, const void *data, uint32_t len)

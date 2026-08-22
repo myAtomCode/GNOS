@@ -44,7 +44,7 @@ int     drm_dev_file_poll(void *ctx, void *private_data, uint64_t flags, size_t 
 void   *drm_dev_file_mmap(void *ctx, void *private_data, uint64_t offset, uint64_t size, int flags, struct vm_area *vma);
 
 /* DRM VFS operation callbacks (registered with devtmpfs at node creation). */
-size_t drm_dev_read(void *file, void *addr, size_t offset, size_t size);
+int64_t drm_dev_read(void *file, void *addr, size_t offset, size_t size);
 size_t drm_dev_write(void *file, const void *addr, size_t offset, size_t size);
 int    drm_dev_ioctl(void *file, size_t req, void *arg);
 int    drm_dev_poll(void *file, size_t events);
