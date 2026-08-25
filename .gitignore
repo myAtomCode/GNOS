@@ -40,3 +40,5 @@ dbg.log
 # 构建产物目录
 oneOS-new/target/
 rustix-vkernel/$PLUGINSDIR/
+build/
+neorunst/
