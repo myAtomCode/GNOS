@@ -1,0 +1,11 @@
+/target/
+/build/
+
+*.elf
+*.img
+*.iso
+*.o
+*.log
+*.raw
+*:Zone.Identifier
+.DS_Store

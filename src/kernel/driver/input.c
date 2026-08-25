@@ -461,3 +461,27 @@ int64_t sys_inputinject(uint64_t type, uint64_t code, uint64_t value)
     evdev_signal();
     return 0;
 }
+
+/* ---- USB HID injection ------------------------------------------------------
+ * usb_hid.c decodes boot-protocol reports and hands the decoded results
+ * here; these push into the same queues the PS/2 side feeds, so evdev
+ * clients get one coherent keyboard and one coherent mouse regardless of
+ * which transport produced the event.
+ */
+void input_usb_kbd(uint16_t key, int pressed)
+{
+    evdev_push(&g_kbd_dev, EV_KEY, key, pressed);
+    evdev_push(&g_kbd_dev, EV_SYN, SYN_REPORT, 0);
+    evdev_signal();
+}
+
+void input_usb_mouse(uint16_t btn_mask, int dx, int dy)
+{
+    evdev_push(&g_mouse_dev, EV_KEY, BTN_LEFT,   btn_mask & 0x01);
+    evdev_push(&g_mouse_dev, EV_KEY, BTN_RIGHT,  (btn_mask >> 1) & 0x01);
+    evdev_push(&g_mouse_dev, EV_KEY, BTN_MIDDLE, (btn_mask >> 2) & 0x01);
+    evdev_push(&g_mouse_dev, EV_REL, REL_X, dx);
+    evdev_push(&g_mouse_dev, EV_REL, REL_Y, dy);
+    evdev_push(&g_mouse_dev, EV_SYN, SYN_REPORT, 0);
+    evdev_signal();
+}

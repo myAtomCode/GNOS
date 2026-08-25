@@ -18,6 +18,7 @@
 #define MBEDTLS_HAVE_ASM
 #define MBEDTLS_HAVE_TIME                 /* musl time(): RTC-backed  */
 #define MBEDTLS_HAVE_TIME_DATE            /* cert validity windows    */
+#define MBEDTLS_FS_IO                     /* read PEM CA bundle / keys from files */
 
 /* ---- feature support --------------------------------------------------- */
 #define MBEDTLS_CIPHER_MODE_GCM

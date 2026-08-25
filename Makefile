@@ -76,7 +76,7 @@ KOBJS := $(BUILD)/kernel.o $(BUILD)/loader.o $(BUILD)/fbcon.o $(BUILD)/gfx.o \
          $(BUILD)/pci.o $(BUILD)/e1000.o $(BUILD)/audio.o \
         $(BUILD)/hda.o $(BUILD)/ata.o $(BUILD)/cjkfont.o \
         $(BUILD)/cjkfont_data.o \
-        $(BUILD)/input.o \
+        $(BUILD)/input.o $(BUILD)/xhci.o $(BUILD)/usb_hid.o $(BUILD)/usb_msc.o \
         $(BUILD)/anonfd.o $(BUILD)/epoll.o $(BUILD)/timerfd.o $(BUILD)/signalfd.o \
         $(BUILD)/unix.o \
         $(BUILD)/module.o $(BUILD)/module_elf.o $(BUILD)/exports.o \
@@ -168,7 +168,10 @@ MBEDTLS_PREFIX := $(BUILD)/mbedtls-inst
 MBEDTLS_LIBS   := $(MBEDTLS_PREFIX)/lib/libmbedtls.a \
                   $(MBEDTLS_PREFIX)/lib/libmbedx509.a \
                   $(MBEDTLS_PREFIX)/lib/libmbedcrypto.a
-MBEDTLS_CFLAGS := $(MUSLCFLAGS) -I$(MBEDTLS_SRC) -I$(MBEDTLS_INC)
+# Delayed expansion (not :=): MUSLCFLAGS is defined further down; with := it
+# would expand empty here and mbedtls would build against glibc headers, whose
+# -D_FILE_OFFSET_BITS=64 turns fopen into fopen64 -- a symbol musl lacks.
+MBEDTLS_CFLAGS = $(MUSLCFLAGS) -I$(MBEDTLS_SRC) -I$(MBEDTLS_INC)
 
 $(MBEDTLS_LIBS): $(MBEDTLS_SRC)/library/Makefile $(wildcard $(MBEDTLS_SRC)/library/*.c) $(MBEDTLS_INC)/mbedtls/mbedtls_config.h $(MBEDTLS_INC)/mbedtls/config.h
 	mkdir -p $(MBEDTLS_PREFIX)/lib
@@ -270,7 +273,7 @@ MUSLCFLAGS := $(filter-out -Isrc/include -Isrc/kernel/core -Isrc/kernel/driver \
                            -Isrc/kernel/driver/drm \
                            -mgeneral-regs-only \
                            -mno-sse -mno-sse2 -mno-mmx -mno-80387,$(BASEFLAGS)) \
-              -isystem $(MUSL_INC) -Isrc/user -fno-pie -fno-pic
+              -isystem $(abspath $(MUSL_INC)) -Isrc/user -fno-pie -fno-pic
 
 # Hardware handed to the guest beyond the PC platform minimum.  The e1000 is
 # the NIC src/kernel/e1000.c drives; the AC97 is the codec src/kernel/audio.c

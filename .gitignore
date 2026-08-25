@@ -28,3 +28,15 @@ __pycache__/
 # OS文件
 .DS_Store
 Thumbs.db
+
+# 调试与临时产物
+.dbg/
+tmp-vhd/
+*.iso
+*.raw
+initrd.img
+dbg.log
+
+# 构建产物目录
+oneOS-new/target/
+rustix-vkernel/$PLUGINSDIR/

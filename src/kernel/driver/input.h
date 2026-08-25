@@ -26,4 +26,12 @@ void input_kbd_scancode(uint8_t sc);
  * this driver does not own. */
 void input_set_nonblock(vfs_node_t *n, int nb);
 
+/* Feed decoded USB HID keyboard/mouse events into the evdev queues.  The
+ * USB HID driver (usb_hid.c) turns boot-protocol reports into these
+ * *results* -- a key code + pressed flag, or mouse deltas + button mask --
+ * exactly the shape the PS/2 decoder produces, so libinput sees one
+ * coherent device no matter which wire the event came over. */
+void input_usb_kbd(uint16_t key, int pressed);
+void input_usb_mouse(uint16_t btn_mask, int dx, int dy);
+
 #endif

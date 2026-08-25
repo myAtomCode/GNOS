@@ -56,6 +56,9 @@
 #include "drm.h"
 #include "drm_init.h"
 #include "procfs.h"
+#include "xhci.h"
+#include "usb_hid.h"
+#include "usb_msc.h"
 
 extern volatile struct limine_framebuffer_request framebuffer_request;
 extern volatile struct limine_module_request      module_request;
@@ -202,6 +205,17 @@ void kernel_entry(void)
         subsys_set_state(slot_hda, SUBSYS_STATE_FAILED);
     }
 
+    /* USB 3.0 (xHCI) comes up after PCI so the controller can be found,
+     * but before the input/block drivers that sit on its transfer
+     * primitives.  Devices are addressed here; the HID keyboard/mouse and
+     * mass-storage drivers probe them below. */
+    int slot_xhci = subsys_register("xhci", NULL, SUBSYS_CLASS_OTHER, 0, 0);
+    if (xhci_init()) {
+        subsys_set_state(slot_xhci, SUBSYS_STATE_FAILED);
+    } else {
+        subsys_set_state(slot_xhci, SUBSYS_STATE_LIVE);
+    }
+
     /* The IP stack sits on top of whatever the NIC probe found, so it is
      * configured here and not in e1000_init(): with no card it still comes up
      * with a working loopback, which is all `ping 127.0.0.1` needs. */
@@ -246,6 +260,11 @@ void kernel_entry(void)
      * come after the VFS for the same /dev-table reason as fbdev. */
     input_init();
 
+    /* USB HID keyboard/mouse (when the xHCI controller is present and a
+     * device is on a port) feed the same evdev queues the PS/2 side uses,
+     * so /dev/input/event0/1 are the same two devices either way. */
+    usb_hid_init();
+
     /* /dev/fb0 goes in after the VFS (it needs the /dev table) but shares the
      * framebuffer with fbcon: the boot log stays on screen until a user-space
      * program opens the device and draws over it. */
@@ -268,6 +287,12 @@ void kernel_entry(void)
      * as far as one with four.  ata_init() registers its own subsys slot,
      * because it discovers how many entries it needs while probing. */
     ata_init();
+
+    /* USB mass storage (when the xHCI controller has a flash drive on a
+     * port) publishes /dev/sdb through the same block-device layer ATA
+     * uses.  Read-only by design: enough to mount a FAT32 or ext2 drive,
+     * not enough to lose data to a driver bug. */
+    usb_msc_init();
 
     /* ----. The rest of the root fs setup ---------------------------------
      * At this point the root filesystem is mounted and the disks are up, the

@@ -11,6 +11,7 @@
 #include "panic.h"
 #include "debugcon.h"
 #include "lapic.h"
+#include "usb_hid.h"
 
 #define PIT_CH0    0x40
 #define PIT_CH2    0x42
@@ -88,6 +89,7 @@ static void timer_irq(regs_t *r)
          * running while the machine is idle.
          */
         net_tick();
+        usb_hid_poll();
         sched_tick();
     }
 }

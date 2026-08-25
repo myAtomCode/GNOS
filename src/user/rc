@@ -78,6 +78,22 @@ echo GNOS rc: ready
 # /usr/bin/grep -q 'HTTP/1.1' /var/log/curl-baidu.log
 # echo CURLTEST: response asserted rc=$?
 
+# ---- curl https: real TLS handshake -------------------------------------
+# The kernel's TCP/UDP stack now carries a full TLS 1.2 handshake to a real
+# server: DNS via musl getaddrinfo to the slirp resolver, then mbedTLS
+# against the bundled root bundle.  The whole transcript lands on the debug
+# console through dbgcat, so `make headless` can assert on the verdict.
+echo CURLHTTPS: curl https://example.com
+/usr/bin/curl -sS --max-time 15 -o /var/log/curl-https.body \
+  -w 'HTTP %{http_code} verify:%{ssl_verify_result}\n' \
+  --cacert /etc/ssl/certs/ca-bundle.pem \
+  https://example.com > /var/log/curl-https.log 2>&1
+echo CURLHTTPS: curl exited with status $?
+/bin/dbgcat.elf /var/log/curl-https.log
+/usr/bin/grep -q 'verify:0' /var/log/curl-https.log
+echo CURLHTTPS: TLS verified rc=$?
+/bin/dbgcat.elf /var/log/curl-https.body
+
 # ---- fastfetch smoke test ------------------------------------------------
 # The system-info tool, run against the real OS (not the build machine):
 # every module that cannot work here must degrade to nothing rather than
