@@ -1,5 +1,9 @@
 # GNOS
 
+<p align="center">
+  <img src="assets/gnos-icon.png" alt="GNOS" width="200">
+</p>
+
 > 🚀 **这是你见过迄今为止最强的小学生开发的操作系统** —— 由一位**五年级小学生**独立开发。
 > x86_64 真内核：SMP 多核 + EEVDF 现代调度器 + Linux ABI + 网络栈 + Wayland 桌面。
 

@@ -17,6 +17,7 @@ llvm-build/
 *.mkv
 *.wav
 *.png
+!assets/gnos-icon.png
 *.docx
 *.psf
 
