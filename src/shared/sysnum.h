@@ -70,6 +70,8 @@
 #define SYS_geteuid      107
 #define SYS_getegid      108
 #define SYS_arch_prctl   158
+#define SYS_prctl        157
+#define SYS_seccomp      317
 #define SYS_gettid       186
 #define SYS_futex        202
 #define SYS_set_tid_address 218
@@ -82,6 +84,27 @@
 #define SYS_openat       257
 #define SYS_uname        63
 #define SYS_umask        95
+/*
+ * System V IPC (sem/msg/shm).  x86-64 numbers, matching musl's
+ * arch/x86_64/bits/syscall.h.in: semget/semop/semctl live at 64-66,
+ * shmget/shmat/shmctl at 29-31, shmdt at 67, msgget/msgsnd/msgrcv/msgctl
+ * at 68-71 and semtimedop at 220.  ftok needs no syscall: musl builds the
+ * key from stat(2) itself.  The sem_* and shm_* syscalls are also what
+ * musl's POSIX adaptors ultimately rest on where they use the kernel
+ * objects rather than /dev/shm files.
+ */
+#define SYS_shmget        29
+#define SYS_shmat         30
+#define SYS_shmctl        31
+#define SYS_semget        64
+#define SYS_semop         65
+#define SYS_semctl        66
+#define SYS_shmdt         67
+#define SYS_msgget        68
+#define SYS_msgsnd        69
+#define SYS_msgrcv        70
+#define SYS_msgctl        71
+#define SYS_semtimedop   220
 /*
  * gethostname is NOT a Linux system call -- glibc and musl both synthesise it
  * from uname(2).  It used to sit at 100, which on Linux/x86-64 is times(2):
@@ -283,6 +306,7 @@ typedef struct {
 #define PROT_WRITE   0x2
 #define PROT_EXEC    0x4
 #define MAP_PRIVATE  0x02
+#define MAP_SHARED   0x01
 #define MAP_FIXED    0x10
 #define MAP_ANONYMOUS 0x20
 
@@ -876,5 +900,93 @@ typedef struct {
 #define AT_CLKTCK   17
 #define AT_SECURE   23
 #define AT_RANDOM   25
+
+/* ---- prctl() option numbers ------------------------------------------- */
+#define PR_SET_NO_NEW_PRIVS  38
+#define PR_GET_NO_NEW_PRIVS  39
+#define PR_SET_SECCOMP       22
+#define PR_GET_SECCOMP       21
+
+/* ---- seccomp modes ---------------------------------------------------- */
+#define SECCOMP_MODE_DISABLED   0
+#define SECCOMP_MODE_STRICT     1
+#define SECCOMP_MODE_FILTER     2
+
+/* ---- seccomp(2) operations -------------------------------------------- */
+#define SECCOMP_SET_MODE_FILTER    1
+#define SECCOMP_GET_ACTION_AVAIL   2
+
+/* seccomp filter return values (action | data). */
+#define SECCOMP_RET_KILL_PROCESS 0x00000000  /* kill the process */
+#define SECCOMP_RET_KILL_THREAD  0x00010000  /* kill the thread */
+#define SECCOMP_RET_TRAP         0x00020000  /* send SIGSYS */
+#define SECCOMP_RET_ERRNO        0x00050000  /* return -errno (data = errno) */
+#define SECCOMP_RET_USER_NOTIF   0x7fc00000  /* notif to userspace (stub) */
+#define SECCOMP_RET_TRACE        0x7ff00000  /* ptrace event */
+#define SECCOMP_RET_LOG          0x7ffc0000  /* allow + log */
+#define SECCOMP_RET_ALLOW        0x7fff0000  /* allow */
+#define SECCOMP_RET_ACTION       0xffff0000  /* mask for action bits */
+
+/* ---- classic BPF constants for seccomp -------------------------------- */
+#define SECCOMP_BPF_MAXINSNS  256
+struct sock_fprog {
+    unsigned short len;     /* number of BPF instructions */
+    struct sock_filter *filter;
+};
+struct sock_filter {
+    unsigned short code;
+    unsigned char  jt;
+    unsigned char  jf;
+    unsigned int   k;
+};
+
+/* BPF opcodes (subset used by seccomp). */
+#define BPF_LD   0x00
+#define BPF_LDX  0x01
+#define BPF_ST   0x02
+#define BPF_STX  0x03
+#define BPF_ALU  0x04
+#define BPF_JMP  0x05
+#define BPF_RET  0x06
+#define BPF_MISC 0x07
+
+/* BPF size bits (in code, upper 3 bits of load/store size). */
+#define BPF_W    0x00
+#define BPF_H    0x08
+#define BPF_B    0x10
+
+/* BPF source bits (in code). */
+#define BPF_K    0x00
+#define BPF_X    0x08
+
+/* BPF modifier for LD/LDX. */
+#define BPF_ABS  0x20
+#define BPF_IND  0x40
+#define BPF_MEM  0x60
+
+/* BPF ALU operations. */
+#define BPF_ADD  0x00
+#define BPF_SUB  0x10
+#define BPF_MUL  0x20
+#define BPF_DIV  0x30
+#define BPF_AND  0x50
+#define BPF_OR   0x40
+#define BPF_LSH  0x60
+#define BPF_RSH  0x70
+
+/* BPF jump operations. */
+#define BPF_JA   0x00
+#define BPF_JEQ  0x10
+#define BPF_JGT  0x20
+#define BPF_JGE  0x30
+#define BPF_JSET 0x40
+
+/* BPF misc operations. */
+#define BPF_TAX  0x00
+#define BPF_TXA  0x80
+#define BPF_A    0x10
+
+/* Special BPF return values for seccomp. */
+#define SECCOMP_RET_ACTION_MASK  0xffff0000
 
 #endif
