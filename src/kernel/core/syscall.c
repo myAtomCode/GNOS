@@ -41,6 +41,8 @@
 #include "epoll.h"
 #include "input.h"
 #include "unix.h"
+#include "sysvipc.h"
+#include "seccomp.h"
 
 /* reboot(169) command codes; the Linux ABI as musl's reboot() passes them. */
 #define LINUX_REBOOT_CMD_RESTART    0x01234567
@@ -727,7 +729,7 @@ static int64_t sys_getcwd(uint64_t ubuf, uint64_t size)
 /* ---- odds and ends a full libc expects -------------------------------- */
 /* Hostname, a single small buffer.  Processes are all root here, so there is
  * no permission check to skip. */
-static char g_hostname[64] = "gnos";
+static char g_hostname[64] = "GNOS";
 
 /*
  * uname(63).  The strings are what a program prints, and occasionally what a
@@ -848,10 +850,12 @@ static int64_t sys_getrandom(uint64_t ubuf, uint64_t usize, uint64_t uflags)
 }
 
 /* ---- mount(165) / umount2(166) ---------------------------------------
- * Only tmpfs is mountable; everything else (proc/sysfs/devtmpfs) is either
- * already special-cased by the VFS (/proc) or intentionally left alone
- * (/dev must keep its static device nodes).  MS_REMOUNT is accepted as a
- * no-op so shutdown-style "mount -o remount,ro" does not fail the boot.
+ * tmpfs is mountable anywhere, and the cgroup v2 hierarchy is mountable
+ * under either its "cgroup2" or legacy "cgroup" name; everything else
+ * (proc/sysfs/devtmpfs) is either already special-cased by the VFS (/proc)
+ * or intentionally left alone (/dev must keep its static device nodes).
+ * MS_REMOUNT is accepted as a no-op so shutdown-style "mount -o remount,ro"
+ * does not fail the boot.
  */
 #define MS_REMOUNT 0x20
 
@@ -885,10 +889,12 @@ static int64_t sys_mount(uint64_t usrc, uint64_t utgt, uint64_t ufs,
     if (uflags & MS_REMOUNT)
         return 0;                       /* ro/rw tracking is not implemented */
 
-    if (strcmp(fst, "tmpfs") != 0)
-        return -E_NODEV;
+    if (strcmp(fst, "tmpfs") == 0)
+        return vfs_mount_tmpfs(abs);
+    if (strcmp(fst, "cgroup2") == 0 || strcmp(fst, "cgroup") == 0)
+        return vfs_mount_cgroupfs(abs);
 
-    return vfs_mount_tmpfs(abs);
+    return -E_NODEV;
 }
 
 static int64_t sys_umount2(uint64_t utgt, uint64_t uflags)
@@ -3010,6 +3016,51 @@ static int64_t sys_mmap(uint64_t addr, uint64_t len, uint64_t prot,
             return -E_BADF;
         uint8_t kind = vfs_file_kind(h);
         if (kind == VFS_FILE) {
+            /* MAP_SHARED on a tmpfs file is POSIX shared memory / named
+             * semaphores: map the *node's own* frames so every process that
+             * maps the file shares the same physical memory (musl's
+             * shm_open/sem_open live entirely on this path).  MAP_PRIVATE
+             * keeps the copy-in behaviour below. */
+            if ((flags & MAP_SHARED) && tmpfs_is_file_node(vfs_file_node(h))) {
+                struct tmpfs_node *tn =
+                    (struct tmpfs_node *)vfs_file_node(h)->priv;
+                uint64_t fsize = tmpfs_file_size(vfs_file_node(h));
+                uint64_t mapsize = (fsize + PAGE_SIZE - 1) & ~0xFFFULL;
+                if (mapsize == 0)
+                    mapsize = PAGE_SIZE;
+
+                uint64_t base = (flags & MAP_FIXED) ? (addr & ~0xFFFULL)
+                              : (addr ? (addr & ~0xFFFULL)
+                                      : mmap_pick_base(p, mapsize));
+                if (!base || base + mapsize > USER_LIMIT)
+                    return -E_INVAL;
+                if (tmpfs_node_shm_start(tn, mapsize) < 0)
+                    return -ENOMEM;
+
+                unsigned sv = vflags | VM_EXTSHM;
+                uint32_t npages = (uint32_t)(mapsize >> 12);
+                uint32_t done = 0;
+                for (; done < npages; done++) {
+                    if (!vmm_map(p->as, base + ((uint64_t)done << 12),
+                                 tmpfs_node_shm_frame(tn, done), sv))
+                        break;
+                }
+                if (done < npages) {
+                    vmm_unmap(p->as, base, (uint64_t)done << 12);
+                    return -ENOMEM;
+                }
+                if (!mmap_record(p, base, mapsize, sv) ||
+                    p->as->nshared >= 16) {
+                    vmm_unmap(p->as, base, mapsize);
+                    return -ENOMEM;
+                }
+                p->as->shared[p->as->nshared].node = tn;
+                p->as->shared[p->as->nshared].base = base;
+                p->as->shared[p->as->nshared].size = mapsize;
+                p->as->nshared++;
+                tmpfs_node_shm_addmapper(tn);
+                return (int64_t)base;
+            }
             /* Regular file: populate the mapping with the file's bytes.
              * musl/labwc/fontconfig mmap fonts, keymaps and config read-only
              * (MAP_PRIVATE), so copying the contents in once is exactly the
@@ -3250,9 +3301,27 @@ static int64_t sys_munmap(uint64_t addr, uint64_t len)
     /* Whole mapping: the common free() path. */
     if (addr == base && ulen == size) {
         vmm_unmap(p->as, base, size);
+        /* A MAP_SHARED tmpfs file mapping drops its owner entry (and the
+         * node's mapper reference) here; partial trims of a shared mapping
+         * are refused below for the same bookkeeping reason. */
+        for (uint32_t i = 0; i < p->as->nshared; i++) {
+            if (p->as->shared[i].base != base)
+                continue;
+            tmpfs_node_shm_putmapper(p->as->shared[i].node);
+            for (uint32_t j = i; j < p->as->nshared - 1; j++)
+                p->as->shared[j] = p->as->shared[j + 1];
+            p->as->nshared--;
+            break;
+        }
         mmap_forget(p, idx);
         return 0;
     }
+    /* Refuse partial trims of a shared-file mapping: the owner bookkeeping
+     * tracks whole mappings (nobody in-tree partially unmaps /dev/shm
+     * regions, which is what this protects). */
+    for (uint32_t i = 0; i < p->as->nshared; i++)
+        if (p->as->shared[i].base == base)
+            return -E_INVAL;
     /* Tail trim: mallocng shaves the unused end off an arena when a large
      * block is freed.  Refusing it used to strand the pages until exit. */
     if (addr == base && ulen < size) {
@@ -3610,12 +3679,19 @@ static int64_t sys_futex(uint64_t uaddr, uint64_t op, uint64_t val,
             return -E_AGAIN;
 
         uint64_t deadline = utimeout ? timer_ticks() + (uint64_t)ticks : 0;
+        /* A futex word on a shared page (POSIX named semaphore) must wake
+         * across address spaces, so it is keyed by physical address; a
+         * private word stays keyed by (address space, virtual address). */
+        p->futex_shared = vmm_page_shared(p->as, uaddr);
+        p->futex_key    = p->futex_shared ? vmm_resolve(p->as, uaddr) : 0;
         p->futex_addr = uaddr;
         if (utimeout)
             sched_block_timeout(WAIT_FUTEX, (uint64_t)ticks);
         else
             sched_block(WAIT_FUTEX);
         p->futex_addr = 0;
+        p->futex_shared = 0;
+        p->futex_key    = 0;
 
         if (proc_pending_signals(p))
             return -E_INTR;
@@ -3985,6 +4061,25 @@ void syscall_handler(regs_t *r)
         nr = r->rax;                  /* whatever the tracer left in RAX */
     }
 
+    /* ---- seccomp-BPF filter check ------------------------------------
+     * If this process has a seccomp filter, run it before dispatching the
+     * syscall.  The filter may deny the call (returning -errno, killing
+     * the process, or delivering SIGSYS). */
+    if (p && p->secc_mode != SECCOMP_MODE_DISABLED) {
+        int sc = seccomp_check(p, (int)nr, a1, a2, a3, r->r10, r->r8, r->r9);
+        if (sc != 0) {
+            if (sc == -E_KILLED) {
+                /* Kill the process.  proc_exit with signal 31 (SIGSYS). */
+                p->term_sig = 31;
+                proc_exit(p);
+                return;
+            }
+            ret = sc;
+            r->rax = (uint64_t)ret;
+            goto done;
+        }
+    }
+
     switch (nr) {
     case SYS_read:
         if (!user_ptr_ok(a2, a3)) { ret = -E_INVAL; break; }
@@ -4264,6 +4359,46 @@ void syscall_handler(regs_t *r)
 
     case SYS_umount2:
         ret = sys_umount2(a1, a2);
+        break;
+
+    /* ---- System V IPC --------------------------------------------------
+     * sem/msg/shm; argument orders are the raw Linux x86-64 syscall
+     * orders (the 4th/5th args arrive in r10/r8). */
+    case SYS_semget:
+        ret = sysv_semget((int32_t)a1, (int)a2, (int)a3);
+        break;
+    case SYS_semop:
+        ret = sysv_semop((int)a1, a2, (size_t)a3);
+        break;
+    case SYS_semtimedop:
+        ret = sysv_semtimedop((int)a1, a2, (size_t)a3, r->r10);
+        break;
+    case SYS_semctl:
+        ret = sysv_semctl((int)a1, (int)a2, (int)a3, r->r10);
+        break;
+    case SYS_msgget:
+        ret = sysv_msgget((int32_t)a1, (int)a2);
+        break;
+    case SYS_msgsnd:
+        ret = sysv_msgsnd((int)a1, a2, (size_t)a3, (int)r->r10);
+        break;
+    case SYS_msgrcv:
+        ret = sysv_msgrcv((int)a1, a2, (size_t)a3, (long)r->r10, (int)r->r8);
+        break;
+    case SYS_msgctl:
+        ret = sysv_msgctl((int)a1, (int)a2, r->r10);
+        break;
+    case SYS_shmget:
+        ret = sysv_shmget((int32_t)a1, (size_t)a2, (int)a3);
+        break;
+    case SYS_shmat:
+        ret = sysv_shmat((int)a1, a2, (int)a3);
+        break;
+    case SYS_shmdt:
+        ret = sysv_shmdt(a1);
+        break;
+    case SYS_shmctl:
+        ret = sysv_shmctl((int)a1, (int)a2, r->r10);
         break;
 
     /* reboot(169): the Linux reboot(2) ABI, used verbatim by musl's
@@ -4790,6 +4925,27 @@ void syscall_handler(regs_t *r)
         ret = sys_arch_prctl(a1, a2);
         break;
 
+    case SYS_prctl:
+        /* Linux prctl(2) numbers: a1 = option, a2 = arg2, a3 = arg3,
+         * a4 = arg4, a5 = arg5.  We handle the seccomp-related options
+         * here; everything else returns -ENOSYS. */
+        switch ((int)a1) {
+        case PR_SET_NO_NEW_PRIVS:
+        case PR_GET_NO_NEW_PRIVS:
+        case PR_SET_SECCOMP:
+        case PR_GET_SECCOMP:
+            ret = seccomp_prctl(p, (int)a1, a2);
+            break;
+        default:
+            ret = -E_NOSYS;
+            break;
+        }
+        break;
+
+    case SYS_seccomp:
+        ret = sys_seccomp(a1, a2, a3);
+        break;
+
     case SYS_set_tid_address:
         ret = sys_set_tid_address(a1);
         break;
@@ -4953,6 +5109,7 @@ void syscall_handler(regs_t *r)
         dbg_puts("\n");
     }
 #endif
+done:
     r->rax = (uint64_t)ret;
 
     /* Ring buffer of the last few syscalls, for the fault dumper: when a
