@@ -85,7 +85,12 @@
 #define E_NOSYS      38
 #define E_NOTEMPTY   39
 #define E_LOOP       40
+/* System V IPC errnos (Linux numbers): msgrcv returns ENOMSG when no
+ * matching message is waiting, and every blocked IPC call wakes up with
+ * EIDRM when its object is removed under it. */
 #define E_OVERFLOW   75
+#define E_MSG        42              /* ENOMSG */
+#define E_IDRM       43              /* EIDRM */
 
 /* Sockets bring their own half of the errno table with them.  These are the
  * Linux numbers, not invented ones: musl maps a negative return straight into
@@ -113,6 +118,11 @@
 #define E_HOSTUNREACH   113
 #define E_ALREADY       114
 #define E_INPROGRESS    115
+
+/* Internal-only (not a real Linux errno): returned by seccomp_check when
+ * the filter decides the process should be killed.  Never seen by user
+ * space; syscall_handler intercepts it and calls proc_exit(). */
+#define E_KILLED        256
 
 struct vfs_node;
 
@@ -213,6 +223,12 @@ int  vfs_statfs(const char *path, void *out);
  * a negative errno.  This is the VFS side of mount(2); only tmpfs is
  * supported, so any other fstype fails with -E_NODEV at the syscall layer. */
 int  vfs_mount_tmpfs(const char *path);
+
+/* Mount the (single, shared) cgroup v2 hierarchy at `path`, as mount(2)
+ * does for fstype "cgroup"/"cgroup2".  Returns 0 or a negative errno.
+ * Several mounts of the same hierarchy are allowed at different paths. */
+int  vfs_mount_cgroupfs(const char *path);
+
 /* Remove the mount at `path`.  Returns 0 or a negative errno. */
 int  vfs_umount(const char *path);
 
